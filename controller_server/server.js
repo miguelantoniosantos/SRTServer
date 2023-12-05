@@ -22,7 +22,13 @@ async function generateServerConfig(server, timeout, rtt) {
     if (server.min_rtt > rtt) {
         rtt = server.min_rtt;
     }
-    const configContent = baseConfig.replaceAll("TIMEOUT_HERE", timeout).replaceAll('RTT_HERE', rtt);
+    if (server.max_rtt < rtt) {
+        rtt = server.max_rtt;
+    }
+    const configContent = baseConfig.replaceAll("TIMEOUT_HERE", timeout)
+        .replaceAll('RTT_HERE', rtt)
+        .replaceAll('DRONE_NAME_HERE', server.name)
+        .replaceAll('DRONE_STREAM_KEY_HERE', server.stream_key);
     fs.writeFileSync(`./config/srt_${server.name}.conf`, configContent);
     server.currentRTT = rtt;
 }
@@ -40,8 +46,10 @@ async function config() {
             "name": name,
             "port": port,
             "api_key": server.key,
+            "stream_key": server.stream_key,
             "max_timeout": server.max_timeout,
             "min_rtt": server.min_rtt,
+            "max_rtt": server.max_rtt,
             process: null,
             status: 0, // 0 => not running, 1 => started, 2 => restarting
             avgPing: null,
@@ -52,7 +60,7 @@ async function config() {
 }
 
 async function startProcess(server) {
-    const startBash = `docker run --rm --name ${server.name} -p 1935:1935 -p 8080:8080 -p ${server.port}:10080/udp -v ./config/srt_${server.name}.conf:/config/srt.conf  ossrs/srs:5 ./objs/srs -c /config/srt.conf`;
+    const startBash = `docker run --rm --name ${server.name} -p ${server.port}:10080/udp -v ./config/srt_${server.name}.conf:/config/srt.conf  ossrs/srs:5 ./objs/srs -c /config/srt.conf`;
     server.process = exec(startBash, (error, stdout, stderr) => {
         if (error) {
             server.status = 0;
@@ -99,22 +107,18 @@ async function boot() {
 }
 
 
-async function waitForMS(ms) {
-    return new Promise(resolve => {
-        setTimeout(resolve, ms);
-    })
-}
-
 async function restartServer(server, rtt, timeout) {
-    await generateServerConfig(server, rtt, timeout);
-    server.status = 2;
-    const pid = server.process.pid;
-    console.log(`Server ${server.name} stopping for restart`);
-    await stopProcess(server);
-    console.log(`Server ${server.name} stopped for restart`);
-    await startProcess(server);
-    console.log(`Server ${server.name} restarted on port ${server.port}`);
-    server.status = 1;
+    if (settings.restartServers) {
+        await generateServerConfig(server, rtt, timeout);
+        server.status = 2;
+        const pid = server.process.pid;
+        console.log(`Server ${server.name} stopping for restart`);
+        await stopProcess(server);
+        console.log(`Server ${server.name} stopped for restart`);
+        await startProcess(server);
+        console.log(`Server ${server.name} restarted on port ${server.port}`);
+        server.status = 1;
+    }
 }
 
 const average = array => array.reduce((a, b) => a + b) / array.length;
@@ -140,12 +144,14 @@ app.post('/ping', async (req, res) => {
     }
     const requestTime = req.body.time;
     const ping = now - requestTime;
+    console.log(`Ping from ${server.name} is ${ping}ms`);
     server.pings.push(ping);
-    if (server.pings.length > 50) {
+    if (server.pings.length > 150) {
         server.pings.shift();
     }
     server.avgPing = average(server.pings);
-    const rtt = (server.avgPing + 10) * 3;
+    console.log(`Average ping from ${server.name} is ${server.avgPing}ms`);
+    const rtt = (server.avgPing + 10) * 1.5;
     const timeout = rtt * 100;
     let requiresRestart = false;
     const currentRTT = server.currentRTT;
@@ -158,8 +164,6 @@ app.post('/ping', async (req, res) => {
     }
     res.send('OK');
 });
-
-
 
 
 async function main() {
