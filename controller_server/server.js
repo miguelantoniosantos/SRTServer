@@ -1,9 +1,10 @@
 const settings = require('./settings.json');
 const fs = require('fs');
 const servers = {};
-const { spawn } = require('child_process');
+const { exec } = require('child_process');
 const express = require('express');
-const e = require('express');
+const net = require('net');
+
 const app = express()
 app.use(express.json());
 
@@ -42,7 +43,7 @@ async function config() {
             "max_timeout": server.max_timeout,
             "min_rtt": server.min_rtt,
             process: null,
-            status: 0, // 0 => not running, 1 => started, 2 => restarting,
+            status: 0, // 0 => not running, 1 => started, 2 => restarting
             avgPing: null,
             pings: [],
             currentRTT: 0
@@ -51,9 +52,37 @@ async function config() {
 }
 
 async function startProcess(server) {
-    const startBash = `run -rm -p 1935:1935 -p 8080:8080 -p ${server.port}:10080/udp -v ./config/srt_${server.name}.conf:/config/srt.conf  ossrs/srs:5 ./objs/srs -c /config/srt.conf`;
-    server.process = spawn('docker', startBash.split(' '));
+    const startBash = `docker run --rm --name ${server.name} -p 1935:1935 -p 8080:8080 -p ${server.port}:10080/udp -v ./config/srt_${server.name}.conf:/config/srt.conf  ossrs/srs:5 ./objs/srs -c /config/srt.conf`;
+    server.process = exec(startBash, (error, stdout, stderr) => {
+        if (error) {
+            server.status = 0;
+            return;
+        }
+        if (stderr) {
+            server.status = 0;
+            return;
+        }
+    });
     server.status = 1;
+}
+
+async function stopProcess(server) {
+    return new Promise(function (resolve) {
+        const stopBash = `docker rm $(docker container ls -q --filter name=${server.name}) --force`;
+        exec(stopBash, (error, stdout, stderr) => {
+            if (error) {
+                server.status = 0;
+                resolve(false);
+                return;
+            }
+            if (stderr) {
+                server.status = 0;
+                resolve(false);
+                return;
+            }
+            resolve(true);
+        });
+    });
 }
 
 async function boot() {
@@ -70,20 +99,6 @@ async function boot() {
 }
 
 
-async function isPortFree(port) {
-    return new Promise(resolve => {
-        const server = require('http')
-            .createServer()
-            .listen(port, () => {
-                server.close()
-                resolve(true)
-            })
-            .on('error', () => {
-                resolve(false)
-            })
-    })
-}
-
 async function waitForMS(ms) {
     return new Promise(resolve => {
         setTimeout(resolve, ms);
@@ -93,12 +108,9 @@ async function waitForMS(ms) {
 async function restartServer(server, rtt, timeout) {
     await generateServerConfig(server, rtt, timeout);
     server.status = 2;
-    console.log("sending kill");
-    server.process.kill();
+    const pid = server.process.pid;
     console.log(`Server ${server.name} stopping for restart`);
-    while (!await isPortFree(server.port)) {
-        await waitForMS(100);
-    }
+    await stopProcess(server);
     console.log(`Server ${server.name} stopped for restart`);
     await startProcess(server);
     console.log(`Server ${server.name} restarted on port ${server.port}`);
@@ -131,7 +143,7 @@ app.post('/ping', async (req, res) => {
     server.pings.push(ping);
     if (server.pings.length > 50) {
         server.pings.shift();
-    }    
+    }
     server.avgPing = average(server.pings);
     const rtt = (server.avgPing + 10) * 3;
     const timeout = rtt * 100;
@@ -142,7 +154,6 @@ app.post('/ping', async (req, res) => {
         requiresRestart = true;
     }
     if (requiresRestart) {
-        console.log("here");
         restartServer(server, rtt, timeout);
     }
     res.send('OK');
