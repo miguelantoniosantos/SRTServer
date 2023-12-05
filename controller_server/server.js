@@ -146,7 +146,7 @@ app.post('/ping', async (req, res) => {
     const ping = now - requestTime;
     console.log(`Ping from ${server.name} is ${ping}ms`);
     server.pings.push(ping);
-    if (server.pings.length > 150) {
+    if (server.pings.length > 20) {
         server.pings.shift();
     }
     server.avgPing = average(server.pings);
