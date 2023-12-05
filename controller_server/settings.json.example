@@ -1,0 +1,16 @@
+{
+    "httpServerPort": 18571,
+    "baseTimeout": 30000,
+    "baseRTT": 300,
+    "basePing": 100,
+    "varianceNeededForRestart": 0.2,
+    "servers": [
+        {
+            "name": "stream",
+            "key": "API_KEY",
+            "port": 10080,
+            "max_timeout": 30000,
+            "min_rtt": 100
+        }
+    ]
+}

@@ -1,0 +1,4 @@
+config/srt_drone1.conf
+controller_server/node_modules/*
+controller_server/settings.json
+objs/srs
